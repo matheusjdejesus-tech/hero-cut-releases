@@ -1,0 +1,88 @@
+# Instaladores do Windows e do Mac Intel do HERO CUT. Roda aqui, no repositório público dos instaladores, porque em
+# repositório público o GitHub Actions não gasta a cota de minutos (o código fica no repositório privado hero-cut).
+#
+# Quem dispara é o `npm run release` do hero-cut (scripts/release.mjs), depois de publicar a versão do Mac Apple
+# Silicon: ele roda este workflow, espera, baixa os instaladores gerados aqui e sobe para a mesma versão nesta página.
+#
+# O código vem do hero-cut privado pela chave HERO_CUT_FONTE (segredo deste repositório): um token de acesso
+# refinado, só de leitura do conteúdo do hero-cut. Segredos não chegam a pull requests de forks, e só quem tem acesso
+# de escrita aqui pode disparar o workflow. Os registros do build são públicos: nenhum passo imprime código ou segredo.
+#
+# O endereço do Supabase e a chave pública (anon) vêm das variáveis do repositório (não são segredo: vão dentro do
+# app). A chave secreta do serviço nunca entra aqui.
+name: Instaladores (Windows e Mac Intel)
+
+on:
+  workflow_dispatch:
+    inputs:
+      versao:
+        description: Versão já publicada (ex. 0.7.23), sem o v
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  instalador:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - nome: windows
+            os: windows-latest
+            binarios: --win
+            alvo: --win nsis --x64
+          - nome: mac-intel
+            os: macos-15-intel
+            binarios: --mac
+            alvo: --mac dmg zip --x64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    env:
+      MAIN_VITE_SUPABASE_URL: ${{ vars.MAIN_VITE_SUPABASE_URL }}
+      MAIN_VITE_SUPABASE_ANON_KEY: ${{ vars.MAIN_VITE_SUPABASE_ANON_KEY }}
+      MAIN_VITE_HEROCUT_API: ${{ vars.MAIN_VITE_HEROCUT_API }}
+    steps:
+      # A versão vira o nome da tag: só número.número.número (nada de outro texto no ref do checkout).
+      - name: Versão válida
+        shell: bash
+        env:
+          VERSAO: ${{ inputs.versao }}
+        run: '[[ "$VERSAO" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Versão inválida: $VERSAO"; exit 1; }'
+      - name: Código do hero-cut (privado), na tag da versão
+        uses: actions/checkout@v4
+        with:
+          repository: matheusjdejesus-tech/hero-cut
+          ref: v${{ inputs.versao }}
+          token: ${{ secrets.HERO_CUT_FONTE }}
+          # A chave não fica gravada no .git da máquina (nenhum passo seguinte precisa dela).
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - uses: astral-sh/setup-uv@v6
+      - name: Dependências
+        run: npm ci
+      - name: ffmpeg e yt-dlp
+        run: node scripts/fetch-binaries.mjs ${{ matrix.binarios }}
+      - name: IA empacotada
+        run: node scripts/build-ai.mjs
+      - name: App
+        run: npm run build
+      - name: Instalador
+        working-directory: apps/desktop
+        shell: bash
+        run: npx electron-builder ${{ matrix.alvo }} --publish never
+      # Os instaladores ficam aqui só até o release.mjs baixar e subir para a versão: 1 dia basta.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.nome }}
+          retention-days: 1
+          if-no-files-found: error
+          path: |
+            apps/desktop/release/*.exe
+            apps/desktop/release/*.dmg
+            apps/desktop/release/*.zip
+            apps/desktop/release/*.blockmap
+            apps/desktop/release/latest*.yml
