@@ -57,6 +57,24 @@ jobs:
           token: ${{ secrets.HERO_CUT_FONTE }}
           # A chave não fica gravada no .git da máquina (nenhum passo seguinte precisa dela).
           persist-credentials: false
+      - name: Verificar credenciais do Mac Intel
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          missing=0
+          for name in CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
+            if [[ -z "${!name}" ]]; then
+              echo "::error::Credencial obrigatória ausente: $name (CSC_* usa os secrets MAC_CSC_*)."
+              missing=1
+            fi
+          done
+          exit "$missing"
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -70,10 +88,28 @@ jobs:
         run: node scripts/build-ai.mjs
       - name: App
         run: npm run build
-      - name: Instalador
+      - name: Instalador Windows
+        if: runner.os == 'Windows'
         working-directory: apps/desktop
         shell: bash
         run: npx electron-builder ${{ matrix.alvo }} --publish never
+      - name: Instalador Mac Intel assinado e notarizado
+        if: runner.os == 'macOS'
+        working-directory: apps/desktop
+        shell: bash
+        env:
+          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          npx electron-builder ${{ matrix.alvo }} --publish never
+          # Impede enviar artefatos de tags antigas ainda configuradas com assinatura ad-hoc.
+          app='release/mac/HERO CUT.app'
+          codesign --verify --deep --strict "$app"
+          xcrun stapler validate "$app"
+          spctl --assess --type execute --verbose=2 "$app"
       # Os instaladores ficam aqui só até o release.mjs baixar e subir para a versão: 1 dia basta.
       - uses: actions/upload-artifact@v4
         with:
