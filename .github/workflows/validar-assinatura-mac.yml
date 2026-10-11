@@ -2,9 +2,6 @@ name: Validar credenciais de assinatura Mac
 
 on:
   workflow_dispatch:
-  push:
-    branches: [codex/assinatura-mac]
-    paths: [.github/workflows/validar-assinatura-mac.yml]
 
 permissions:
   contents: read
