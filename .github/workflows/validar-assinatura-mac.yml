@@ -1,0 +1,52 @@
+name: Validar credenciais de assinatura Mac
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [codex/assinatura-mac]
+    paths: [.github/workflows/validar-assinatura-mac.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  validar:
+    runs-on: macos-15-intel
+    timeout-minutes: 10
+    steps:
+      - name: Validar certificado e acesso à notarização
+        shell: bash
+        env:
+          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          for name in CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
+            [[ -n "${!name}" ]] || { echo "::error::Credencial ausente: $name"; exit 1; }
+          done
+          work="$(mktemp -d)"
+          keychain="$work/signing.keychain-db"
+          cleanup() {
+            security delete-keychain "$keychain" >/dev/null 2>&1 || true
+            rm -rf "$work"
+          }
+          trap cleanup EXIT
+          umask 077
+          printf '%s' "$CSC_LINK" | base64 --decode > "$work/certificate.p12"
+          keychain_password="$(openssl rand -hex 32)"
+          echo "::add-mask::$keychain_password"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$work/certificate.p12" -k "$keychain" -P "$CSC_KEY_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain" >/dev/null
+          security list-keychains -d user -s "$keychain"
+          identity='Developer ID Application: Matheus Jesus (NX7W8MMT84)'
+          cp /usr/bin/true "$work/signature-check"
+          codesign --force --sign "$identity" --keychain "$keychain" --timestamp --options runtime "$work/signature-check"
+          codesign --verify --strict "$work/signature-check"
+          xcrun notarytool history --apple-id "$APPLE_ID" --password "$APPLE_APP_SPECIFIC_PASSWORD" --team-id "$APPLE_TEAM_ID" --output-format json >/dev/null
+          echo 'Certificado com chave privada e credenciais de notarização: válidos no Mac Intel.'
